@@ -17,7 +17,7 @@
         <p>Buffer Length: <span id="bufferLength">0 s</span></p>
         <p>Average Throughput: <span id="averageThroughput">0 kbps</span></p>
         <p>Playhead Time: <span id="playheadTime">0 s</span></p>
-        <p>Resolution: <span id="resolution">0 x 0</span></p>
+        <p>Resolution (pixels): <span id="resolution">0</span></p>
     </div>
 
     <script>
@@ -28,28 +28,24 @@
         function updateMetrics() {
             const video = document.getElementById("videoPlayer");
 
-            // Buffer length
+            // Buffer length (in seconds)
             const bufferLength = video.buffered.length > 0
                 ? video.buffered.end(video.buffered.length - 1) - video.currentTime
                 : 0;
 
-            // Playhead
+            // Playhead time
             const playheadTime = video.currentTime;
 
-            // Throughput
-            const avgThroughput = player.getAverageThroughput("video") 
-                ? player.getAverageThroughput("video") / 1000 
-                : 0;
+            // Approximate throughput
+            const avgThroughput = player.getAverageThroughput("video") / 1000 || 0; // kbps
 
-            // Resolution
-            const qualityIndex = player.getQualityFor("video");
-            const bitrateInfo = player.getBitrateInfoListFor("video")[qualityIndex];
-            const resolution = bitrateInfo ? `${bitrateInfo.width} x ${bitrateInfo.height}` : "0 x 0";
+            // Resolution as total pixels
+            const resolution = video.videoWidth * video.videoHeight || 0;
 
             document.getElementById("bufferLength").innerText = bufferLength.toFixed(2) + " s";
             document.getElementById("averageThroughput").innerText = avgThroughput.toFixed(2) + " kbps";
             document.getElementById("playheadTime").innerText = playheadTime.toFixed(2) + " s";
-            document.getElementById("resolution").innerText = resolution;
+            document.getElementById("resolution").innerText = resolution.toLocaleString();
         }
 
         setInterval(updateMetrics, 1000);
