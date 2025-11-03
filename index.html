@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>DASH.js Player Metrics</title>
+    <script src="https://cdn.dashjs.org/latest/dash.all.min.js"></script>
+    <style>
+        video { width: 80%; max-width: 800px; margin-bottom: 20px; }
+        body { font-family: Arial; margin: 20px; }
+    </style>
+</head>
+<body>
+    <h1>DASH.js Video Player</h1>
+    <video id="videoPlayer" controls autoplay></video>
+
+    <div>
+        <p>Buffer Length: <span id="bufferLength">0 s</span></p>
+        <p>Average Throughput: <span id="averageThroughput">0 kbps</span></p>
+        <p>Playhead Time: <span id="playheadTime">0 s</span></p>
+    </div>
+
+    <script>
+        const url = "https://dash.akamaized.net/envivio/EnvivioDash3/manifest.mpd";
+        const player = dashjs.MediaPlayer().create();
+        player.initialize(document.getElementById("videoPlayer"), url, true);
+
+        function updateMetrics() {
+            const video = document.getElementById("videoPlayer");
+
+            // Buffer length (in seconds)
+            const bufferLength = video.buffered.length > 0
+                ? video.buffered.end(video.buffered.length - 1) - video.currentTime
+                : 0;
+
+            // Playhead time
+            const playheadTime = video.currentTime;
+
+            // Throughput (approx, using dash.js getAverageThroughput)
+            const avgThroughput = player.getAverageThroughput("video") / 1000 || 0; // kbps
+
+            document.getElementById("bufferLength").innerText = bufferLength.toFixed(2) + " s";
+            document.getElementById("averageThroughput").innerText = avgThroughput.toFixed(2) + " kbps";
+            document.getElementById("playheadTime").innerText = playheadTime.toFixed(2) + " s";
+        }
+
+        setInterval(updateMetrics, 1000);
+    </script>
+</body>
+</html>
