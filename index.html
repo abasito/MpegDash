@@ -17,7 +17,7 @@
         <p>Buffer Length: <span id="bufferLength">0 s</span></p>
         <p>Average Throughput: <span id="averageThroughput">0 kbps</span></p>
         <p>Playhead Time: <span id="playheadTime">0 s</span></p>
-        <p>Resolution: <span id="resolution">-</span></p>
+        <p>Resolution: <span id="resolution">0 x 0</span></p>
     </div>
 
     <script>
@@ -33,28 +33,23 @@
                 ? video.buffered.end(video.buffered.length - 1) - video.currentTime
                 : 0;
 
-            // Playhead time
+            // Playhead
             const playheadTime = video.currentTime;
 
-            // Average throughput (kbps)
+            // Throughput
             const avgThroughput = player.getAverageThroughput("video") 
                 ? player.getAverageThroughput("video") / 1000 
                 : 0;
 
-            // Current resolution
+            // Resolution
             const qualityIndex = player.getQualityFor("video");
-            let resolutionText = "-";
-            const bitrates = player.getBitrateInfoListFor("video");
-            if (bitrates && bitrates.length > 0 && qualityIndex !== undefined) {
-                const { width, height } = bitrates[qualityIndex];
-                resolutionText = `${width} x ${height}`;
-            }
+            const bitrateInfo = player.getBitrateInfoListFor("video")[qualityIndex];
+            const resolution = bitrateInfo ? `${bitrateInfo.width} x ${bitrateInfo.height}` : "0 x 0";
 
-            // Update UI
             document.getElementById("bufferLength").innerText = bufferLength.toFixed(2) + " s";
             document.getElementById("averageThroughput").innerText = avgThroughput.toFixed(2) + " kbps";
             document.getElementById("playheadTime").innerText = playheadTime.toFixed(2) + " s";
-            document.getElementById("resolution").innerText = resolutionText;
+            document.getElementById("resolution").innerText = resolution;
         }
 
         setInterval(updateMetrics, 1000);
