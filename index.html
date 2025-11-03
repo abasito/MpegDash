@@ -17,6 +17,7 @@
         <p>Buffer Length: <span id="bufferLength">0 s</span></p>
         <p>Average Throughput: <span id="averageThroughput">0 kbps</span></p>
         <p>Playhead Time: <span id="playheadTime">0 s</span></p>
+        <p>Resolution: <span id="resolution">0 x 0</span></p>
     </div>
 
     <script>
@@ -38,9 +39,16 @@
             // Throughput (approx, using dash.js getAverageThroughput)
             const avgThroughput = player.getAverageThroughput("video") / 1000 || 0; // kbps
 
+            // Resolution
+            const currentVideoTrack = player.getCurrentTrackFor("video");
+            const resolution = currentVideoTrack
+                ? currentVideoTrack.width + " x " + currentVideoTrack.height
+                : "0 x 0";
+
             document.getElementById("bufferLength").innerText = bufferLength.toFixed(2) + " s";
             document.getElementById("averageThroughput").innerText = avgThroughput.toFixed(2) + " kbps";
             document.getElementById("playheadTime").innerText = playheadTime.toFixed(2) + " s";
+            document.getElementById("resolution").innerText = resolution;
         }
 
         setInterval(updateMetrics, 1000);
