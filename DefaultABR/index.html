@@ -5,19 +5,101 @@
     <title>DASH.js Player Metrics</title>
     <script src="https://cdn.dashjs.org/latest/dash.all.min.js"></script>
     <style>
-        video { width: 80%; max-width: 800px; margin-bottom: 20px; }
-        body { font-family: Arial; margin: 20px; }
+        /* Global styles */
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            margin: 0;
+            background-color: #121212;
+            color: #ffffff;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        h1 {
+            margin-top: 20px;
+            font-size: 2em;
+            color: #ff3b3f;
+        }
+
+        /* Video player */
+        video {
+            width: 90%;
+            max-width: 900px;
+            border-radius: 12px;
+            box-shadow: 0 8px 20px rgba(0,0,0,0.5);
+            margin-bottom: 20px;
+        }
+
+        /* Metrics panel */
+        .metrics {
+            background-color: #1e1e1e;
+            padding: 20px 30px;
+            border-radius: 12px;
+            width: 90%;
+            max-width: 900px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.4);
+            display: flex;
+            justify-content: space-around;
+            flex-wrap: wrap;
+        }
+
+        .metric {
+            margin: 10px;
+            text-align: center;
+        }
+
+        .metric span {
+            display: block;
+            font-size: 1.2em;
+            margin-top: 5px;
+            color: #00ffcc;
+        }
+
+        /* Footer */
+        .footer {
+            margin-top: auto;
+            padding: 20px;
+            color: #888;
+            font-size: 0.9em;
+        }
+
+        /* Responsive adjustments */
+        @media (max-width: 600px) {
+            .metrics {
+                flex-direction: column;
+                align-items: center;
+            }
+        }
     </style>
 </head>
 <body>
     <h1>DASH.js Video Player</h1>
     <video id="videoPlayer" controls autoplay></video>
 
-    <div>
-        <p>Buffer Length: <span id="bufferLength">0 s</span></p>
-        <p>Average Throughput: <span id="averageThroughput">0 kbps</span></p>
-        <p>Playhead Time: <span id="playheadTime">0 s</span></p>
-        <p>Resolution: <span id="resolution">0 x 0</span></p>
+    <div class="metrics">
+        <div class="metric">
+            <strong>Buffer Length</strong>
+            <span id="bufferLength">0 s</span>
+        </div>
+        <div class="metric">
+            <strong>Average Throughput</strong>
+            <span id="averageThroughput">0 kbps</span>
+        </div>
+        <div class="metric">
+            <strong>Playhead Time</strong>
+            <span id="playheadTime">0 s</span>
+        </div>
+        <div class="metric">
+            <strong>Resolution</strong>
+            <span id="resolution">0 x 0</span>
+        </div>
+    </div>
+
+    <div class="footer">
+        Made with sweat and tears using DASH.js for streaming
     </div>
 
     <script>
