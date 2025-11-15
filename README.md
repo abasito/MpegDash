@@ -70,7 +70,7 @@ To quickly test the server and the app, you can download a ready-made DASH folde
 - Correct folder structure
 
 👉 Download the sample clip (ZIP):  
-https://qucloud-my.sharepoint.com/:f:/g/personal/aa2204061_qu_edu_qa/EluWanpdIOlHrO_RyXIPXlUBbLzCuutGZLdW4OzwQM-kRw?e=aAsBLR
+https://qucloud-my.sharepoint.com/:f:/g/personal/aa2204061_qu_edu_qa/EluWanpdIOlHrO_RyXIPXlUBuNh_dLfTdXwOFs2XyTUWsw?e=meAOW5
 
 **How to use it:**
 
