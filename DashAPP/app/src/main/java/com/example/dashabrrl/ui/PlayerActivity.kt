@@ -16,9 +16,13 @@ import androidx.media3.common.Format
 import androidx.media3.common.TrackSelectionOverride
 import androidx.media3.common.TrackSelectionParameters
 import androidx.media3.common.Tracks
-import androidx.media3.datasource.okhttp.OkHttpDataSource
 import androidx.media3.datasource.DataSource
 import androidx.media3.datasource.HttpDataSource
+import androidx.media3.datasource.cache.CacheDataSource
+import androidx.media3.datasource.cache.LeastRecentlyUsedCacheEvictor
+import androidx.media3.datasource.cache.SimpleCache
+import androidx.media3.database.StandaloneDatabaseProvider
+import androidx.media3.datasource.okhttp.OkHttpDataSource
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.RenderersFactory
@@ -37,6 +41,7 @@ import com.example.dashabrrl.rl.RlAbrController
 import com.example.dashabrrl.telemetry.QosLogger
 import com.example.dashabrrl.net.TappingDataSource
 import com.example.dashabrrl.net.ByteTapRegistry
+import java.io.File
 
 class PlayerActivity : AppCompatActivity() {
   companion object {
@@ -46,6 +51,24 @@ class PlayerActivity : AppCompatActivity() {
     const val MODE_ADAPTIVE = "adaptive"
     const val MODE_FIXED = "fixed"
     const val MODE_RL = "rl"
+
+    @Volatile
+    private var simpleCache: SimpleCache? = null
+
+    private fun getSimpleCache(context: android.content.Context): SimpleCache {
+      val existing = simpleCache
+      if (existing != null) return existing
+      synchronized(PlayerActivity::class.java) {
+        val again = simpleCache
+        if (again != null) return again
+        val cacheDir = File(context.cacheDir, "media_cache")
+        val evictor = LeastRecentlyUsedCacheEvictor(200L * 1024 * 1024) // 200 MB
+        val dbProvider = StandaloneDatabaseProvider(context.applicationContext)
+        val cache = SimpleCache(cacheDir, evictor, dbProvider)
+        simpleCache = cache
+        return cache
+      }
+    }
   }
 
   private lateinit var playerView: PlayerView
@@ -199,7 +222,14 @@ class PlayerActivity : AppCompatActivity() {
     val baseFactory: DataSource.Factory = OkHttpDataSource.Factory(client)
     val tappingFactory: DataSource.Factory = TappingDataSource.Factory(baseFactory)
 
-    return DashMediaSource.Factory(tappingFactory).createMediaSource(mediaItem)
+    val cache = getSimpleCache(applicationContext)
+
+    val cacheFactory = CacheDataSource.Factory()
+      .setCache(cache)
+      .setUpstreamDataSourceFactory(tappingFactory)
+      .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
+
+    return DashMediaSource.Factory(cacheFactory).createMediaSource(mediaItem)
   }
 
   private fun prepareAndPlay(url: String) {
