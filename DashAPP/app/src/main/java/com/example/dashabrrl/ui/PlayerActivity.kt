@@ -154,12 +154,20 @@ class PlayerActivity : AppCompatActivity() {
       playerView.setShowSubtitleButton(true)
     } catch (_: Throwable) { /* no-op if not available */ }
 
-    player?.trackSelectionParameters = player?.trackSelectionParameters
-      ?.buildUpon()
-      ?.setSelectUndeterminedTextLanguage(true)
-      ?.build() ?: TrackSelectionParameters.DEFAULT_WITHOUT_CONTEXT
+      // Configure track selection:
+// - Keep your subtitle behavior
+// - Remove display / viewport based resolution caps,
+//   so 4K can be selected even on a 1080p screen if the device & network allow it.
+      player!!.trackSelectionParameters =
+          player!!.trackSelectionParameters
+              .buildUpon()
+              .setSelectUndeterminedTextLanguage(true)
+              .clearVideoSizeConstraints()       // Equivalent to setMaxVideoSize(Integer.MAX_VALUE, Integer.MAX_VALUE)
+              .clearViewportSizeConstraints()    // Equivalent to setViewportSize(Integer.MAX_VALUE, Integer.MAX_VALUE, true)
+              .build()
 
-    // QoS logging
+
+      // QoS logging
     qosLogger = QosLogger(this, bandwidthMeter)
     qosLogger.attach(player!!)
     player?.addAnalyticsListener(qosLogger)
