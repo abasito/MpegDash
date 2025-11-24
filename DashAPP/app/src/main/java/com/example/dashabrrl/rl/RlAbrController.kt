@@ -75,7 +75,9 @@ class RlAbrController(
     val count = group.length
     if (count == 0) return
 
-    val bw = bandwidthMeter.bitrateEstimate.toDouble().coerceAtLeast(1.0)
+    // Use 70% of the measured bandwidth so the RL policy stays conservative and leaves headroom (e.g., for audio).
+    val trueBw = bandwidthMeter.bitrateEstimate.toDouble().coerceAtLeast(1.0)
+    val bw = trueBw * 0.7
     val bufferMs = player.totalBufferedDuration.toDouble()
 
     // Build feature vector: [bw_bps, buffer_s, n_tracks, bitrates...]
@@ -99,7 +101,7 @@ class RlAbrController(
       val brJoined = bitrates.joinToString("/") { it.toInt().toString() }
       logger?.logEvent(
         "rl_decision",
-        "bw=${bw.toLong()} buffer_ms=${bufferMs.toLong()} chosen=${chosen} bitrates=${brJoined}" )
+        "true_bw=${trueBw.toLong()} eff_bw=${bw.toLong()} buffer_ms=${bufferMs.toLong()} chosen=${chosen} bitrates=${brJoined}" )
     }
   }
 

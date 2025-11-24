@@ -58,6 +58,11 @@ class RlInferenceEngine(modelBytes: ByteArray) {
       return 0
     }
 
+    // Scale throughput by 0.7 so the RL policy sees a conservative bandwidth estimate.
+    val scaledThroughput = FloatArray(throughputStats.size) { i ->
+      throughputStats[i] * 0.7f
+    }
+
     val bufferTensor = OnnxTensor.createTensor(
       e,
       FloatBuffer.wrap(floatArrayOf(bufferSec)),
@@ -65,7 +70,7 @@ class RlInferenceEngine(modelBytes: ByteArray) {
     )
     val tpTensor = OnnxTensor.createTensor(
       e,
-      FloatBuffer.wrap(throughputStats),
+      FloatBuffer.wrap(scaledThroughput),
       longArrayOf(1, 3)
     )
     val latTensor = OnnxTensor.createTensor(

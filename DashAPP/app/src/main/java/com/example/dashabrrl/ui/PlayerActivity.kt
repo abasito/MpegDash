@@ -166,7 +166,7 @@ class PlayerActivity : AppCompatActivity() {
       .setBandwidthMeter(bandwidthMeter)
       .build()
     playerView.player = player
-  if (playbackMode == MODE_FIXED) {
+    if (playbackMode == MODE_FIXED) {
       player?.addListener(object : androidx.media3.common.Player.Listener {
           override fun onTracksChanged(tracks: Tracks) {
               super.onTracksChanged(tracks)
@@ -191,7 +191,15 @@ class PlayerActivity : AppCompatActivity() {
               }
           }
       })
-  }
+    }
+
+    // Ensure an audio track is always selected (pick lowest-bitrate if none).
+    player?.addListener(object : androidx.media3.common.Player.Listener {
+      override fun onTracksChanged(tracks: Tracks) {
+        super.onTracksChanged(tracks)
+        ensureAudioTrackSelected()
+      }
+    })
     // Show CC button and auto-select text when only undetermined language is available.
     try {
       // PlayerView is a StyledPlayerView alias; this method is available in Media3 UI.
@@ -390,6 +398,11 @@ class PlayerActivity : AppCompatActivity() {
     return t.groups.firstOrNull { it.type == C.TRACK_TYPE_VIDEO }
   }
 
+  private fun getCurrentAudioGroup(): Tracks.Group? {
+    val t = player?.currentTracks ?: return null
+    return t.groups.firstOrNull { it.type == C.TRACK_TYPE_AUDIO }
+  }
+
   private fun sortedVideoIndices(group: Tracks.Group): List<Int> {
     val indices = (0 until group.length).toList()
     return indices.sortedWith(compareByDescending<Int> { idx ->
@@ -407,6 +420,35 @@ class PlayerActivity : AppCompatActivity() {
     if (bitrate <= 0 || bitrate == Format.NO_VALUE) return "– Mbit/s"
     val mbps = bitrate / 1_000_000.0
     return String.format(Locale.US, "%.1f Mbit/s", mbps)
+  }
+
+  private fun ensureAudioTrackSelected() {
+    val p = player ?: return
+    val tracks = p.currentTracks
+    val audioGroup = tracks.groups.firstOrNull { it.type == C.TRACK_TYPE_AUDIO } ?: return
+
+    // If an audio track is already selected, leave it as-is.
+    val alreadySelected = (0 until audioGroup.length).any { audioGroup.isTrackSelected(it) }
+    if (alreadySelected) return
+
+    // Pick the lowest-bitrate audio track to minimize bandwidth usage.
+    var chosenIndex = 0
+    var bestBitrate = Int.MAX_VALUE
+    for (i in 0 until audioGroup.length) {
+      val f = audioGroup.getTrackFormat(i)
+      val br = if (f.bitrate != Format.NO_VALUE && f.bitrate > 0) f.bitrate else Int.MAX_VALUE
+      if (br < bestBitrate) {
+        bestBitrate = br
+        chosenIndex = i
+      }
+    }
+
+    val override = TrackSelectionOverride(audioGroup.mediaTrackGroup, listOf(chosenIndex))
+    p.trackSelectionParameters = p.trackSelectionParameters
+      .buildUpon()
+      .clearOverridesOfType(C.TRACK_TYPE_AUDIO)
+      .addOverride(override)
+      .build()
   }
 
   private fun applyFixedOverrideBySortedPosition(sortedPos: Int): Boolean {
