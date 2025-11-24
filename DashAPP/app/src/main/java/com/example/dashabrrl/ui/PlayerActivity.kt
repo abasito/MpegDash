@@ -116,10 +116,6 @@ class PlayerActivity : AppCompatActivity() {
 
   }
 
-    private fun buildRenderersFactory(): RenderersFactory {
-        return DefaultRenderersFactory(this)
-    }
-
   private fun initPlayer() {
     val bandwidthMeter = DefaultBandwidthMeter.getSingletonInstance(this)
     com.example.dashabrrl.rl.RlState.clear()
@@ -149,7 +145,7 @@ class PlayerActivity : AppCompatActivity() {
       )
       .build()
 
-    player = ExoPlayer.Builder(this, buildRenderersFactory())
+    player = ExoPlayer.Builder(this, DefaultRenderersFactory(this))
       .setTrackSelector(trackSelector)
       .setLoadControl(loadControl)
       .setBandwidthMeter(bandwidthMeter)
