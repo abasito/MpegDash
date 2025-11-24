@@ -31,13 +31,16 @@ import androidx.media3.exoplayer.audio.DefaultAudioSink
 import androidx.media3.exoplayer.dash.DashMediaSource
 import androidx.media3.exoplayer.source.MediaSource
 import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
+import androidx.media3.exoplayer.trackselection.ExoTrackSelection
+import androidx.media3.exoplayer.trackselection.AdaptiveTrackSelection
 import androidx.media3.exoplayer.upstream.DefaultBandwidthMeter
 import androidx.media3.exoplayer.analytics.AnalyticsListener
 import androidx.media3.exoplayer.source.LoadEventInfo
 import androidx.media3.exoplayer.source.MediaLoadData
 import androidx.media3.ui.PlayerView
 import com.example.dashabrrl.R
-import com.example.dashabrrl.rl.RlAbrController
+import com.example.dashabrrl.rl.RlInferenceEngine
+import com.example.dashabrrl.rl.RlTrackSelection
 import com.example.dashabrrl.telemetry.QosLogger
 import com.example.dashabrrl.net.TappingDataSource
 import com.example.dashabrrl.net.ByteTapRegistry
@@ -75,7 +78,7 @@ class PlayerActivity : AppCompatActivity() {
   private var player: ExoPlayer? = null
   private lateinit var trackSelector: DefaultTrackSelector
   private lateinit var qosLogger: QosLogger
-  private var rlController: RlAbrController? = null
+  private var rlEngine: RlInferenceEngine? = null
   private var playbackMode: String = MODE_ADAPTIVE
   // Fixed mode helper state
   private var fixedSelectedSortedPos: Int = -1
@@ -130,7 +133,23 @@ class PlayerActivity : AppCompatActivity() {
 
   private fun initPlayer() {
     val bandwidthMeter = DefaultBandwidthMeter.getSingletonInstance(this)
-    trackSelector = DefaultTrackSelector(this)
+    com.example.dashabrrl.rl.RlState.clear()
+
+    var selectionFactory: ExoTrackSelection.Factory =
+      AdaptiveTrackSelection.Factory()
+
+    if (playbackMode == MODE_RL) {
+      try {
+        val modelBytes = assets.open("abr_agent.onnx").use { it.readBytes() }
+        rlEngine = RlInferenceEngine(modelBytes)
+        selectionFactory = RlTrackSelection.Factory(rlEngine!!)
+        Log.i("PlayerActivity", "RL Model loaded and selection factory created")
+      } catch (e: Exception) {
+        Log.e("PlayerActivity", "Failed to load RL model from assets", e)
+      }
+    }
+
+    trackSelector = DefaultTrackSelector(this, selectionFactory)
 
     val loadControl = DefaultLoadControl.Builder()
       .setBufferDurationsMs(
@@ -154,17 +173,16 @@ class PlayerActivity : AppCompatActivity() {
       playerView.setShowSubtitleButton(true)
     } catch (_: Throwable) { /* no-op if not available */ }
 
-      // Configure track selection:
-// - Keep your subtitle behavior
-// - Remove display / viewport based resolution caps,
-//   so 4K can be selected even on a 1080p screen if the device & network allow it.
-      player!!.trackSelectionParameters =
-          player!!.trackSelectionParameters
-              .buildUpon()
-              .setSelectUndeterminedTextLanguage(true)
-              .clearVideoSizeConstraints()       // Equivalent to setMaxVideoSize(Integer.MAX_VALUE, Integer.MAX_VALUE)
-              .clearViewportSizeConstraints()    // Equivalent to setViewportSize(Integer.MAX_VALUE, Integer.MAX_VALUE, true)
-              .build()
+    // Configure track selection:
+    // - Keep subtitle behavior
+    // - Remove display / viewport based resolution caps for video
+    player!!.trackSelectionParameters =
+      player!!.trackSelectionParameters
+        .buildUpon()
+        .setSelectUndeterminedTextLanguage(true)
+        .clearVideoSizeConstraints()
+        .clearViewportSizeConstraints()
+        .build()
 
 
       // QoS logging
@@ -314,15 +332,6 @@ class PlayerActivity : AppCompatActivity() {
         }
 
         prepareAndPlay(url)
-
-        if (playbackMode == MODE_RL) {
-          val bandwidthMeter = DefaultBandwidthMeter.getSingletonInstance(this)
-          rlController = RlAbrController(this, bandwidthMeter, qosLogger)
-          try {
-            assets.open("abr_agent.onnx").use { rlController?.loadModel(it.readBytes()) }
-          } catch (_: Exception) { }
-          rlController?.start(player!!)
-        }
       }
     }.start()
   }
@@ -415,7 +424,7 @@ class PlayerActivity : AppCompatActivity() {
   override fun onStop() {
     super.onStop()
     playerView.onPause()
-    rlController?.stop()
+    rlEngine?.close()
     player?.release()
     player = null
   }
