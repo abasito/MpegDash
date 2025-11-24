@@ -25,6 +25,7 @@ import androidx.media3.database.StandaloneDatabaseProvider
 import androidx.media3.datasource.okhttp.OkHttpDataSource
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.RenderersFactory
 import androidx.media3.exoplayer.audio.AudioSink
 import androidx.media3.exoplayer.audio.DefaultAudioSink
@@ -98,38 +99,26 @@ class PlayerActivity : AppCompatActivity() {
     validateAndStart(mpdUrl)
 
     // Always hide legacy bottom controls; quality will be under the settings icon.
-    findViewById<View>(R.id.fixedControls)?.visibility = View.GONE
+    val fixedControls = findViewById<View>(R.id.fixedControls)
+    val changeResolutionButton = findViewById<View>(R.id.btnChangeResolution)
+    if (playbackMode == MODE_FIXED) {
+        fixedControls?.visibility = View.VISIBLE
+        changeResolutionButton?.setOnClickListener {
+            showResolutionChooser()
+        }
+    } else {
+        fixedControls?.visibility = View.GONE
+    }
+
 
     // In Fixed mode, a normal click on the settings icon opens the resolution chooser.
     // (Only attach this handler in Fixed mode to avoid overriding the default settings menu otherwise.)
-    if (playbackMode == MODE_FIXED) {
-      playerView.post {
-        val settingsBtnId = androidx.media3.ui.R.id.exo_settings
-        playerView.findViewById<View?>(settingsBtnId)?.setOnClickListener {
-          showResolutionChooser()
-        }
-      }
+
+  }
+
+    private fun buildRenderersFactory(): RenderersFactory {
+        return DefaultRenderersFactory(this)
     }
-  }
-
-  private fun buildRenderersFactory(): RenderersFactory {
-    val audioSink: AudioSink = DefaultAudioSink.Builder()
-      .setEnableFloatOutput(true)
-      .setEnableAudioTrackPlaybackParams(true)
-      .build()
-
-    return object : androidx.media3.exoplayer.DefaultRenderersFactory(this) {
-      override fun buildAudioSink(
-        context: android.content.Context,
-        enableFloatOutput: Boolean,
-        enableAudioTrackPlaybackParams: Boolean
-      ): AudioSink {
-        // AC3 is supported by the platform on modern devices, and FFmpeg extension is added as a fallback
-        return audioSink
-      }
-    }.setExtensionRendererMode(androidx.media3.exoplayer.DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER)
-      .setEnableDecoderFallback(true)
-  }
 
   private fun initPlayer() {
     val bandwidthMeter = DefaultBandwidthMeter.getSingletonInstance(this)
@@ -154,9 +143,9 @@ class PlayerActivity : AppCompatActivity() {
     val loadControl = DefaultLoadControl.Builder()
       .setBufferDurationsMs(
         15000, // min buffer before start
-        50000, // max buffer
-        2500,  // playback rebuffer
-        5000   // back buffer
+        25000, // max buffer
+        1900,  // playback rebuffer
+        1900   // back buffer
       )
       .build()
 
@@ -164,7 +153,7 @@ class PlayerActivity : AppCompatActivity() {
       .setTrackSelector(trackSelector)
       .setLoadControl(loadControl)
       .setBandwidthMeter(bandwidthMeter)
-      .build()
+      .build()  
     playerView.player = player
     if (playbackMode == MODE_FIXED) {
       player?.addListener(object : androidx.media3.common.Player.Listener {
