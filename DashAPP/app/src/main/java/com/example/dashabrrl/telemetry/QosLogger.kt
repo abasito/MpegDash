@@ -181,6 +181,26 @@ class QosLogger(private val context: Context, private val bandwidthMeter: Bandwi
       "load_completed",
       "type=${dataTypeName(mediaLoadData.dataType)} trackType=${trackTypeName(mediaLoadData.trackType)} dur_ms=${loadEventInfo.loadDurationMs} bytes=${loadEventInfo.bytesLoaded} ct=${ct ?: ""} uri=${loadEventInfo.uri}"
     )
+
+    // RL data collection: Only for VIDEO MEDIA chunks
+    if (mediaLoadData.trackType == C.TRACK_TYPE_VIDEO &&
+      mediaLoadData.dataType == C.DATA_TYPE_MEDIA
+    ) {
+      val durationMs = loadEventInfo.loadDurationMs.coerceAtLeast(1L)
+      val durationSec = durationMs / 1000.0
+      val bits = loadEventInfo.bytesLoaded * 8.0
+
+      // Throughput in bits/second
+      val throughputBps = bits / durationSec
+
+      // Latency proxy: use the same duration (or replace with RTT if available)
+      val latencySec = durationSec
+
+      com.example.dashabrrl.rl.RlState.update(
+        throughputBps = throughputBps,
+        latencySec = latencySec
+      )
+    }
   }
 
   override fun onLoadError(
