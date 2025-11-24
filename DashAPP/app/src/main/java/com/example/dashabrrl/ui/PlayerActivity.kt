@@ -147,7 +147,32 @@ class PlayerActivity : AppCompatActivity() {
       .setBandwidthMeter(bandwidthMeter)
       .build()
     playerView.player = player
+  if (playbackMode == MODE_FIXED) {
+      player?.addListener(object : androidx.media3.common.Player.Listener {
+          override fun onTracksChanged(tracks: Tracks) {
+              super.onTracksChanged(tracks)
 
+              // Only auto-select once, or if nothing is selected yet
+              if (fixedSelectedSortedPos != -1) return
+
+              val group = getCurrentVideoGroup() ?: return
+              val sorted = sortedVideoIndices(group)
+
+              if (sorted.isEmpty()) return
+
+              // Choose default fixed quality:
+              // 0 = highest, (sorted.size - 1) = lowest, or a middle index if you prefer
+              val defaultPos = 0 // highest quality
+
+              if (applyFixedOverrideBySortedPosition(defaultPos)) {
+                  qosLogger.logEvent(
+                      "fixed_resolution_auto",
+                      "sorted_index=$defaultPos"
+                  )
+              }
+          }
+      })
+  }
     // Show CC button and auto-select text when only undetermined language is available.
     try {
       // PlayerView is a StyledPlayerView alias; this method is available in Media3 UI.
