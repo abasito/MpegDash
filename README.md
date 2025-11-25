@@ -83,8 +83,8 @@ https://qucloud-my.sharepoint.com/:f:/g/personal/aa2204061_qu_edu_qa/EluWanpdIOl
 
 1. **Download the APK**
 
-   - Go to this GitHub repository’s **Releases** section.
-   - Download the provided **APK file** (e.g. `dash-player.apk`).
+   - Go to this GitHub repository’s _DashAPP/app/release_ section.
+   - Download the provided **APK file** (e.g. `app-release.apk`).
 
 2. **Install the APK on your device**
 

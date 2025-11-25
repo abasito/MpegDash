@@ -42,6 +42,7 @@ import androidx.media3.ui.PlayerView
 import com.example.dashabrrl.R
 import com.example.dashabrrl.rl.RlInferenceEngine
 import com.example.dashabrrl.rl.RlTrackSelection
+import com.example.dashabrrl.telemetry.DownloadCsvLogger
 import com.example.dashabrrl.telemetry.QosLogger
 import com.example.dashabrrl.net.TappingDataSource
 import com.example.dashabrrl.net.ByteTapRegistry
@@ -79,6 +80,7 @@ class PlayerActivity : AppCompatActivity() {
   private var player: ExoPlayer? = null
   private lateinit var trackSelector: DefaultTrackSelector
   private lateinit var qosLogger: QosLogger
+  private lateinit var downloadLogger: DownloadCsvLogger
   private var rlEngine: RlInferenceEngine? = null
   private var playbackMode: String = MODE_ADAPTIVE
   // Fixed mode helper state
@@ -120,17 +122,30 @@ class PlayerActivity : AppCompatActivity() {
     val bandwidthMeter = DefaultBandwidthMeter.getSingletonInstance(this)
     com.example.dashabrrl.rl.RlState.clear()
 
+    // Logging to app-scoped Downloads directory
+    downloadLogger = DownloadCsvLogger(this, playbackMode)
+
     var selectionFactory: ExoTrackSelection.Factory =
       AdaptiveTrackSelection.Factory()
 
-    if (playbackMode == MODE_RL) {
-      try {
-        val modelBytes = assets.open("abr_agent.onnx").use { it.readBytes() }
-        rlEngine = RlInferenceEngine(modelBytes)
-        selectionFactory = RlTrackSelection.Factory(rlEngine!!)
-        Log.i("PlayerActivity", "RL Model loaded and selection factory created")
-      } catch (e: Exception) {
-        Log.e("PlayerActivity", "Failed to load RL model from assets", e)
+      if (playbackMode == MODE_RL) {
+        try {
+          val modelBytes = assets.open("abr_agent.onnx").use { it.readBytes() }
+          rlEngine = RlInferenceEngine(modelBytes, downloadLogger)
+          selectionFactory = RlTrackSelection.Factory(rlEngine!!, downloadLogger)
+          Log.i("PlayerActivity", "RL Model loaded and selection factory created")
+          downloadLogger.logEvent(
+            source = "PlayerActivity",
+            event = "rl_model_loaded",
+            details = "onnx_model=abr_agent.onnx"
+          )
+        } catch (e: Exception) {
+          Log.e("PlayerActivity", "Failed to load RL model from assets", e)
+          downloadLogger.logEvent(
+            source = "PlayerActivity",
+            event = "rl_model_load_failed",
+            details = "error=${e.javaClass.simpleName}:${e.message ?: ""}"
+          )
       }
     }
 
@@ -168,12 +183,7 @@ class PlayerActivity : AppCompatActivity() {
               // 0 = highest, (sorted.size - 1) = lowest, or a middle index if you prefer
               val defaultPos = 0 // highest quality
 
-              if (applyFixedOverrideBySortedPosition(defaultPos)) {
-                  qosLogger.logEvent(
-                      "fixed_resolution_auto",
-                      "sorted_index=$defaultPos"
-                  )
-              }
+              applyFixedOverrideBySortedPosition(defaultPos)
           }
       })
     }
@@ -194,19 +204,19 @@ class PlayerActivity : AppCompatActivity() {
     // Configure track selection:
     // - Keep subtitle behavior
     // - Remove display / viewport based resolution caps for video
-    player!!.trackSelectionParameters =
-      player!!.trackSelectionParameters
-        .buildUpon()
-        .setSelectUndeterminedTextLanguage(true)
-        .clearVideoSizeConstraints()
-        .clearViewportSizeConstraints()
-        .build()
+      player!!.trackSelectionParameters =
+        player!!.trackSelectionParameters
+          .buildUpon()
+          .setSelectUndeterminedTextLanguage(true)
+          .clearVideoSizeConstraints()
+          .clearViewportSizeConstraints()
+          .build()
 
 
-      // QoS logging
-    qosLogger = QosLogger(this, bandwidthMeter)
-    qosLogger.attach(player!!)
-    player?.addAnalyticsListener(qosLogger)
+        // QoS logging (internal CSVs) + Downloads CSVs
+      qosLogger = QosLogger(this, bandwidthMeter, downloadLogger)
+      qosLogger.attach(player!!)
+      player?.addAnalyticsListener(qosLogger)
 
     // Verbose Media3 logging (use Media3 Log, not android.util.Log)
     androidx.media3.common.util.Log.setLogLevel(
@@ -373,7 +383,6 @@ class PlayerActivity : AppCompatActivity() {
       .setTitle("Pick resolution")
       .setItems(entries.toTypedArray()) { _, which ->
         applyFixedOverrideBySortedPosition(which)
-        qosLogger.logEvent("fixed_resolution_pick", "sorted_index=$which label=${entries[which]}")
       }
       .show()
   }
@@ -463,7 +472,6 @@ class PlayerActivity : AppCompatActivity() {
     if (nextPos >= 0) {
       if (applyFixedOverrideBySortedPosition(nextPos)) {
         Toast.makeText(this, "Selected quality unavailable. Falling back.", Toast.LENGTH_SHORT).show()
-        qosLogger.logEvent("fixed_resolution_fallback", "to_sorted_index=$nextPos")
       }
     }
   }
@@ -479,5 +487,11 @@ class PlayerActivity : AppCompatActivity() {
     rlEngine?.close()
     player?.release()
     player = null
+    if (::qosLogger.isInitialized) {
+      qosLogger.release()
+    }
+    if (::downloadLogger.isInitialized) {
+      downloadLogger.close()
+    }
   }
 }

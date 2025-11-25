@@ -101,7 +101,8 @@ class RlAbrController(
       val brJoined = bitrates.joinToString("/") { it.toInt().toString() }
       logger?.logEvent(
         "rl_decision",
-        "true_bw=${trueBw.toLong()} eff_bw=${bw.toLong()} buffer_ms=${bufferMs.toLong()} chosen=${chosen} bitrates=${brJoined}" )
+        "true_bw=${trueBw.toLong()} eff_bw=${bw.toLong()} buffer_ms=${bufferMs.toLong()} chosen=${chosen} bitrates=${brJoined}"
+      )
     }
   }
 

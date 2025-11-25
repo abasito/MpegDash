@@ -3,7 +3,7 @@ package com.example.dashabrrl.rl
 import ai.onnxruntime.OnnxTensor
 import ai.onnxruntime.OrtEnvironment
 import ai.onnxruntime.OrtSession
-import android.util.Log
+import com.example.dashabrrl.telemetry.DownloadCsvLogger
 import java.nio.FloatBuffer
 
 /**
@@ -13,22 +13,41 @@ import java.nio.FloatBuffer
  *   input_names=["chunk_sizes", "buffer_sec", "throughput", "latency"]
  *   output_names=["logits", "value"]
  */
-class RlInferenceEngine(modelBytes: ByteArray) {
-
-  companion object {
-    private const val TAG = "RlInference"
-  }
+class RlInferenceEngine(
+  modelBytes: ByteArray,
+  private val eventsLogger: DownloadCsvLogger?
+) {
 
   private var env: OrtEnvironment? = null
   private var session: OrtSession? = null
 
   init {
-    try {
-      env = OrtEnvironment.getEnvironment()
-      session = env?.createSession(modelBytes)
-      Log.d(TAG, "ONNX Session created. Inputs=${session?.inputNames} Outputs=${session?.outputNames}")
+    env = try {
+      OrtEnvironment.getEnvironment()
     } catch (e: Exception) {
-      Log.e(TAG, "Failed to create ONNX session", e)
+      eventsLogger?.logEvent(
+        source = "RL",
+        event = "onnx_env_failed",
+        details = "error=${e.javaClass.simpleName}:${e.message ?: ""}"
+      )
+      null
+    }
+    session = try {
+      env?.createSession(modelBytes)
+    } catch (e: Exception) {
+      eventsLogger?.logEvent(
+        source = "RL",
+        event = "onnx_session_failed",
+        details = "error=${e.javaClass.simpleName}:${e.message ?: ""}"
+      )
+      null
+    }
+    if (session != null) {
+      eventsLogger?.logEvent(
+        source = "RL",
+        event = "onnx_session_created",
+        details = "inputs=${session?.inputNames} outputs=${session?.outputNames}"
+      )
     }
   }
 
@@ -54,7 +73,11 @@ class RlInferenceEngine(modelBytes: ByteArray) {
 
     val nActions = if (RlState.LOOKAHEAD > 0) chunkSizesBits.size / RlState.LOOKAHEAD else 0
     if (nActions <= 0) {
-      Log.w(TAG, "predict: Invalid nActions from chunkSizesBits.size=${chunkSizesBits.size}")
+      eventsLogger?.logEvent(
+        source = "RL",
+        event = "predict_invalid_actions",
+        details = "chunkSizes_len=${chunkSizesBits.size} lookahead=${RlState.LOOKAHEAD}"
+      )
       return 0
     }
 
@@ -99,8 +122,12 @@ class RlInferenceEngine(modelBytes: ByteArray) {
         val logits = logitsValue[0]
         argmax(logits)
       }
-    } catch (e2: Exception) {
-      Log.e(TAG, "Inference failed", e2)
+    } catch (e: Exception) {
+      eventsLogger?.logEvent(
+        source = "RL",
+        event = "predict_failed",
+        details = "error=${e.javaClass.simpleName}:${e.message ?: ""}"
+      )
       0
     } finally {
       try {

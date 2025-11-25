@@ -1,150 +1,116 @@
 package com.example.dashabrrl.telemetry
 
 import android.content.Context
+import android.os.Handler
+import android.os.Looper
 import androidx.media3.common.C
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
-import androidx.media3.common.VideoSize
+import androidx.media3.common.Tracks
+import androidx.media3.common.Format
 import androidx.media3.datasource.HttpDataSource
-import com.example.dashabrrl.net.ByteTapRegistry
-import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.analytics.AnalyticsListener
+import androidx.media3.exoplayer.DecoderReuseEvaluation
 import androidx.media3.exoplayer.source.LoadEventInfo
 import androidx.media3.exoplayer.source.MediaLoadData
 import androidx.media3.exoplayer.upstream.BandwidthMeter
-import java.io.File
-import java.io.FileWriter
+import com.example.dashabrrl.net.ByteTapRegistry
 import java.io.IOException
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
+import java.util.ArrayDeque
 
-class QosLogger(private val context: Context, private val bandwidthMeter: BandwidthMeter) : AnalyticsListener {
-  private val sdf = SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.US)
-  private val outFile: File by lazy {
-    File(context.getExternalFilesDir(null), "qos_log.csv")
-  }
-  private val eventsFile: File by lazy {
-    File(context.getExternalFilesDir(null), "events_log.csv")
-  }
-  private var writer: FileWriter? = null
-  private var eventsWriter: FileWriter? = null
+class QosLogger(
+  private val context: Context,
+  private val bandwidthMeter: BandwidthMeter,
+  private val downloadLogger: DownloadCsvLogger
+) : AnalyticsListener {
   private var playerRef: Player? = null
+  private var lastPlaybackState: Int = Player.STATE_IDLE
+  private var freezeStartRealtimeMs: Long? = null
+  private val pendingFreezeDurationsMs: ArrayDeque<Long> = ArrayDeque()
+
+  private data class PendingSegment(
+    val startMs: Long,
+    val trackType: String,
+    val format: Format?,
+    val freezeSec: Double
+  )
+
+  private val pendingSegments: MutableList<PendingSegment> = mutableListOf()
+  private val mainHandler = Handler(Looper.getMainLooper())
+  private var segmentPollerStarted: Boolean = false
+
+  private val segmentPollRunnable = object : Runnable {
+    override fun run() {
+      try {
+        dispatchPlayedSegments()
+      } finally {
+        if (segmentPollerStarted) {
+          mainHandler.postDelayed(this, 200L)
+        }
+      }
+    }
+  }
 
   fun attach(player: Player) {
     playerRef = player
-  }
-
-  private fun writeHeaderIfNeeded() {
-    if (writer == null) {
-      writer = FileWriter(outFile, true)
-      if (outFile.length() == 0L) {
-        writer?.appendLine("time,state,position_ms,playing,video_bitrate,video_width,video_height,buffer_ms,bandwidth_bps,dropped_frames")
-        writer?.flush()
-      }
-    }
-    if (eventsWriter == null) {
-      eventsWriter = FileWriter(eventsFile, true)
-      if (eventsFile.length() == 0L) {
-        eventsWriter?.appendLine("time,event,details")
-        eventsWriter?.flush()
-      }
+    lastPlaybackState = player.playbackState
+    if (!segmentPollerStarted) {
+      segmentPollerStarted = true
+      mainHandler.post(segmentPollRunnable)
     }
   }
 
   override fun onPlaybackStateChanged(_eventTime: AnalyticsListener.EventTime, state: Int) {
-    log()
-  }
-
-  override fun onRenderedFirstFrame(_eventTime: AnalyticsListener.EventTime, output: Any, renderTimeMs: Long) {
-    log()
-  }
-
-  override fun onVideoSizeChanged(_eventTime: AnalyticsListener.EventTime, videoSize: VideoSize) {
-    log()
-  }
-
-  override fun onBandwidthEstimate(
-    eventTime: AnalyticsListener.EventTime,
-    totalLoadTimeMs: Int,
-    totalBytesLoaded: Long,
-    bitrateEstimate: Long
-  ) { log() }
-
-  override fun onPlayerError(_eventTime: AnalyticsListener.EventTime, error: PlaybackException) {
-    log()
-    logEvent("player_error", "${error.errorCodeName}: ${error.message}")
-  }
-
-  private fun log() {
-    writeHeaderIfNeeded()
-    val player = playerRef ?: return
-    val tracks = player.currentTracks
-    val videoGroups = tracks.groups.filter { it.type == C.TRACK_TYPE_VIDEO }
-    var videoBitrate = -1
-    var videoWidth = -1
-    var videoHeight = -1
-    if (videoGroups.isNotEmpty()) {
-      val g = videoGroups.first()
-      for (i in 0 until g.length) {
-        if (g.isTrackSelected(i)) {
-          val f = g.getTrackFormat(i)
-          videoBitrate = f.bitrate
-          videoWidth = f.width
-          videoHeight = f.height
-          break
+    val player = playerRef
+    // Track stalling (rebuffering) periods when the player wants to play.
+    if (player != null) {
+      if (state == Player.STATE_BUFFERING && freezeStartRealtimeMs == null && player.playWhenReady) {
+        freezeStartRealtimeMs = System.currentTimeMillis()
+      } else if (lastPlaybackState == Player.STATE_BUFFERING && state == Player.STATE_READY && player.playWhenReady) {
+        val start = freezeStartRealtimeMs
+        if (start != null) {
+          val durationMs = System.currentTimeMillis() - start
+          if (durationMs > 0) {
+            pendingFreezeDurationsMs.addLast(durationMs)
+          }
         }
+        freezeStartRealtimeMs = null
       }
     }
-    val bandwidth = bandwidthMeter.bitrateEstimate
-    val bufferMs = player.totalBufferedDuration.toInt()
-    val positionMs = player.currentPosition
-    val state = when (player.playbackState) {
-      Player.STATE_IDLE -> "IDLE"
-      Player.STATE_BUFFERING -> "BUFFERING"
-      Player.STATE_READY -> "READY"
-      Player.STATE_ENDED -> "ENDED"
-      else -> "UNKNOWN"
-    }
-    val dropped = (player as? ExoPlayer)?.videoDecoderCounters?.droppedBufferCount ?: -1
-
-    val line = listOf(
-      sdf.format(Date()),
-      state,
-      positionMs,
-      player.isPlaying,
-      videoBitrate,
-      videoWidth,
-      videoHeight,
-      bufferMs,
-      bandwidth,
-      dropped
-    ).joinToString(",")
-
-    writer?.appendLine(line)
-    writer?.flush()
+    lastPlaybackState = state
   }
 
-  fun logEvent(event: String, details: String) {
-    writeHeaderIfNeeded()
-    eventsWriter?.appendLine("${sdf.format(Date())},${event},${details}")
-    eventsWriter?.flush()
+  override fun onPlayerError(_eventTime: AnalyticsListener.EventTime, error: PlaybackException) {
+    downloadLogger.logEvent(
+      source = "QOS",
+      event = "player_error",
+      details = "${error.errorCodeName}: ${error.message ?: ""}"
+    )
   }
 
-  // Track and format change logging
   override fun onVideoInputFormatChanged(
     eventTime: AnalyticsListener.EventTime,
-    format: androidx.media3.common.Format,
-    decoderReuseEvaluation: androidx.media3.exoplayer.DecoderReuseEvaluation?
+    format: Format,
+    decoderReuseEvaluation: DecoderReuseEvaluation?
   ) {
-    logEvent("video_input_format", "bitrate=${format.bitrate}, size=${format.width}x${format.height}")
+    downloadLogger.logEvent(
+      source = "QOS",
+      event = "video_input_format",
+      details = "bitrate=${format.bitrate}, size=${format.width}x${format.height}"
+    )
   }
 
   override fun onTracksChanged(
     eventTime: AnalyticsListener.EventTime,
-    tracks: androidx.media3.common.Tracks
+    tracks: Tracks
   ) {
-    logEvent("tracks_changed", "video_selected=${tracks.groups.any { it.type==C.TRACK_TYPE_VIDEO && (0 until it.length).any(it::isTrackSelected) }}")
+    val hasVideoSelected =
+      tracks.groups.any { it.type == C.TRACK_TYPE_VIDEO && (0 until it.length).any(it::isTrackSelected) }
+    downloadLogger.logEvent(
+      source = "QOS",
+      event = "tracks_changed",
+      details = "video_selected=${hasVideoSelected}"
+    )
   }
 
   override fun onDownstreamFormatChanged(
@@ -153,9 +119,10 @@ class QosLogger(private val context: Context, private val bandwidthMeter: Bandwi
   ) {
     val f = mediaLoadData.trackFormat
     val type = trackTypeName(mediaLoadData.trackType)
-    logEvent(
-      "downstream_format",
-      "type=${type} id=${f?.id} codecs=${f?.codecs} mime=${f?.sampleMimeType} w=${f?.width} h=${f?.height} initBytes=${f?.initializationData?.sumOf { it.size }}"
+    downloadLogger.logEvent(
+      source = "QOS",
+      event = "downstream_format",
+      details = "type=${type} id=${f?.id} codecs=${f?.codecs} mime=${f?.sampleMimeType} w=${f?.width} h=${f?.height} initBytes=${f?.initializationData?.sumOf { it.size }}"
     )
   }
 
@@ -165,9 +132,29 @@ class QosLogger(private val context: Context, private val bandwidthMeter: Bandwi
     loadEventInfo: LoadEventInfo,
     mediaLoadData: MediaLoadData
   ) {
-    logEvent(
-      "load_started",
-      "type=${dataTypeName(mediaLoadData.dataType)} trackType=${trackTypeName(mediaLoadData.trackType)} uri=${loadEventInfo.uri}"
+    val dataType = dataTypeName(mediaLoadData.dataType)
+    val trackType = trackTypeName(mediaLoadData.trackType)
+
+    // Structured HTTP CSV in Downloads
+    val positionMs = playerRef?.currentPosition
+    val ct = loadEventInfo.responseHeaders["Content-Type"]?.firstOrNull()
+    downloadLogger.logHttpEvent(
+      event = "load_started",
+      positionMs = positionMs,
+      dataType = dataType,
+      trackType = trackType,
+      uri = loadEventInfo.uri.toString(),
+      contentType = ct,
+      loadDurationMs = null,
+      bytesLoaded = null,
+      httpCode = null,
+      errorClass = null
+    )
+
+    downloadLogger.logEvent(
+      source = "QOS",
+      event = "load_started",
+      details = "type=${dataType} trackType=${trackType} uri=${loadEventInfo.uri}"
     )
   }
 
@@ -177,10 +164,51 @@ class QosLogger(private val context: Context, private val bandwidthMeter: Bandwi
     mediaLoadData: MediaLoadData
   ) {
     val ct = loadEventInfo.responseHeaders["Content-Type"]?.firstOrNull()
-    logEvent(
-      "load_completed",
-      "type=${dataTypeName(mediaLoadData.dataType)} trackType=${trackTypeName(mediaLoadData.trackType)} dur_ms=${loadEventInfo.loadDurationMs} bytes=${loadEventInfo.bytesLoaded} ct=${ct ?: ""} uri=${loadEventInfo.uri}"
+    val dataType = dataTypeName(mediaLoadData.dataType)
+    val trackType = trackTypeName(mediaLoadData.trackType)
+
+    // Structured HTTP CSV in Downloads
+    val positionMs = playerRef?.currentPosition
+    downloadLogger.logHttpEvent(
+      event = "load_completed",
+      positionMs = positionMs,
+      dataType = dataType,
+      trackType = trackType,
+      uri = loadEventInfo.uri.toString(),
+      contentType = ct,
+      loadDurationMs = loadEventInfo.loadDurationMs,
+      bytesLoaded = loadEventInfo.bytesLoaded,
+      httpCode = null,
+      errorClass = null
     )
+
+    downloadLogger.logEvent(
+      source = "QOS",
+      event = "load_completed",
+      details = "type=${dataType} trackType=${trackType} dur_ms=${loadEventInfo.loadDurationMs} bytes=${loadEventInfo.bytesLoaded} ct=${ct ?: ""} uri=${loadEventInfo.uri}"
+    )
+
+    // Segment-level playback log: VIDEO/AUDIO media chunks.
+    if (mediaLoadData.dataType == C.DATA_TYPE_MEDIA &&
+      (mediaLoadData.trackType == C.TRACK_TYPE_VIDEO || mediaLoadData.trackType == C.TRACK_TYPE_AUDIO)
+    ) {
+      val segmentStartMs =
+        if (mediaLoadData.mediaStartTimeMs != C.TIME_UNSET) mediaLoadData.mediaStartTimeMs
+        else playerRef?.currentPosition ?: -1L
+
+      val freezeMs = if (pendingFreezeDurationsMs.isNotEmpty()) pendingFreezeDurationsMs.removeFirst() else 0L
+      val freezeSec = freezeMs / 1000.0
+      val f = mediaLoadData.trackFormat
+      val readableTrackType = trackTypeName(mediaLoadData.trackType)
+      pendingSegments.add(
+        PendingSegment(
+          startMs = segmentStartMs,
+          trackType = readableTrackType,
+          format = f,
+          freezeSec = freezeSec
+        )
+      )
+    }
 
     // RL data collection: Only for VIDEO MEDIA chunks
     if (mediaLoadData.trackType == C.TRACK_TYPE_VIDEO &&
@@ -214,9 +242,28 @@ class QosLogger(private val context: Context, private val bandwidthMeter: Bandwi
     val ct = loadEventInfo.responseHeaders["Content-Type"]?.firstOrNull()
     val uriStr = loadEventInfo.dataSpec.uri.toString()
     val tail = ByteTapRegistry.hexTail(uriStr, 64) ?: ""
-    logEvent(
-      "load_error",
-      "type=${dataTypeName(mediaLoadData.dataType)} trackType=${trackTypeName(mediaLoadData.trackType)} code=${http} ct=${ct ?: ""} err=${error.javaClass.simpleName}:${error.message} uri=${uriStr} tail=${tail}"
+    val dataType = dataTypeName(mediaLoadData.dataType)
+    val trackType = trackTypeName(mediaLoadData.trackType)
+
+    // Structured HTTP CSV in Downloads
+    val positionMs = playerRef?.currentPosition
+    downloadLogger.logHttpEvent(
+      event = "load_error",
+      positionMs = positionMs,
+      dataType = dataType,
+      trackType = trackType,
+      uri = uriStr,
+      contentType = ct,
+      loadDurationMs = loadEventInfo.loadDurationMs,
+      bytesLoaded = loadEventInfo.bytesLoaded,
+      httpCode = http,
+      errorClass = error.javaClass.simpleName
+    )
+
+    downloadLogger.logEvent(
+      source = "QOS",
+      event = "load_error",
+      details = "type=${dataType} trackType=${trackType} code=${http} ct=${ct ?: ""} err=${error.javaClass.simpleName}:${error.message} uri=${uriStr} tail=${tail}"
     )
   }
 
@@ -235,5 +282,49 @@ class QosLogger(private val context: Context, private val bandwidthMeter: Bandwi
     C.TRACK_TYPE_TEXT -> "TEXT"
     C.TRACK_TYPE_METADATA -> "META"
     else -> t.toString()
+  }
+
+  fun release() {
+    segmentPollerStarted = false
+    mainHandler.removeCallbacksAndMessages(null)
+    pendingSegments.clear()
+  }
+
+  /**
+   * Generic event logging entrypoint used by other components (e.g., RL controllers).
+   */
+  fun logEvent(event: String, details: String) {
+    downloadLogger.logEvent(
+      source = "QOS",
+      event = event,
+      details = details
+    )
+  }
+
+  /**
+   * Poll current playback position and emit playback_log entries when segments
+   * actually start playing on screen. This ensures playback_log.csv reflects
+   * what is being rendered, not just what was loaded.
+   */
+  private fun dispatchPlayedSegments() {
+    val player = playerRef ?: return
+    if (!player.isPlaying) return
+
+    val positionMs = player.currentPosition
+    if (pendingSegments.isEmpty()) return
+
+    val it = pendingSegments.iterator()
+    while (it.hasNext()) {
+      val seg = it.next()
+      if (seg.startMs <= positionMs) {
+        downloadLogger.logPlaybackSegment(
+          segmentStartMs = seg.startMs,
+          trackType = seg.trackType,
+          format = seg.format,
+          freezeSec = seg.freezeSec
+        )
+        it.remove()
+      }
+    }
   }
 }

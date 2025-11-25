@@ -1,6 +1,5 @@
 package com.example.dashabrrl.rl
 
-import android.util.Log
 import androidx.media3.common.C
 import androidx.media3.common.Format
 import androidx.media3.common.TrackGroup
@@ -12,6 +11,7 @@ import androidx.media3.exoplayer.trackselection.AdaptiveTrackSelection
 import androidx.media3.exoplayer.trackselection.BaseTrackSelection
 import androidx.media3.exoplayer.trackselection.ExoTrackSelection
 import androidx.media3.exoplayer.upstream.BandwidthMeter
+import com.example.dashabrrl.telemetry.DownloadCsvLogger
 
 /**
  * Custom track selection that queries the RL policy (ONNX model)
@@ -25,11 +25,11 @@ import androidx.media3.exoplayer.upstream.BandwidthMeter
 class RlTrackSelection(
   group: TrackGroup,
   tracks: IntArray,
-  private val inferenceEngine: RlInferenceEngine
+  private val inferenceEngine: RlInferenceEngine,
+  private val downloadLogger: DownloadCsvLogger?
 ) : BaseTrackSelection(group, *tracks) {
 
   companion object {
-    private const val TAG = "RlTrackSelection"
     // Must match the segment duration used during training (e.g. 2 seconds).
     private const val DEFAULT_SEG_DURATION_SEC = 2.0f
   }
@@ -115,12 +115,19 @@ class RlTrackSelection(
     val clamped = actionIndex.coerceIn(0, nActions - 1)
     val newSelectedIndex = sortedIndices[clamped]
 
-    Log.d(
-      TAG,
-      "RL decision: buffer=${bufferSec}s tp=${tpStats[1]}bps lat=${latStats[1]}s " +
-        "action=$clamped -> internalIndex=$newSelectedIndex (prev=$selectedIndex, " +
-        "changed=${newSelectedIndex != selectedIndex})"
-    )
+    if (newSelectedIndex != selectedIndex) {
+      val f = getFormat(newSelectedIndex)
+      val res = if (f.height != Format.NO_VALUE && f.width != Format.NO_VALUE) {
+        "${f.width}x${f.height}"
+      } else {
+        ""
+      }
+      downloadLogger?.logEvent(
+        source = "RL",
+        event = "rl_decision",
+        details = "buffer_sec=${bufferSec} tp_mean=${tpStats.getOrNull(1) ?: 0f} lat_mean=${latStats.getOrNull(1) ?: 0f} action=${clamped} bitrate=${f.bitrate} res=${res}"
+      )
+    }
 
     selectedIndex = newSelectedIndex
   }
@@ -131,7 +138,8 @@ class RlTrackSelection(
    * This wraps an AdaptiveTrackSelection.Factory so that audio/text still use the standard adaptive logic.
    */
   class Factory(
-    private val inferenceEngine: RlInferenceEngine
+    private val inferenceEngine: RlInferenceEngine,
+    private val downloadLogger: DownloadCsvLogger?
   ) : ExoTrackSelection.Factory {
 
     private val adaptiveFactory = AdaptiveTrackSelection.Factory()
@@ -147,7 +155,7 @@ class RlTrackSelection(
       for (i in definitions.indices) {
         val def: ExoTrackSelection.Definition? = definitions[i]
         if (def != null && def.tracks.isNotEmpty() && isVideoDefinition(def)) {
-          baseSelections[i] = RlTrackSelection(def.group, def.tracks, inferenceEngine)
+          baseSelections[i] = RlTrackSelection(def.group, def.tracks, inferenceEngine, downloadLogger)
         }
       }
       return baseSelections
