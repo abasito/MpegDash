@@ -1,0 +1,1 @@
+ffmpeg -ss 01:17:00 -t 00:05:00 -i "Avatar.The.Way.of.Water.2022.2160p.UHD.Bluray.REMUX.HDR10.HEVC.TrueHD.Atmos.7.1-GHD.mkv" -map 0:v:0 -map 0:a:1 -c copy -map_metadata -1 -map_chapters -1 -dn -sn "test.mkv"

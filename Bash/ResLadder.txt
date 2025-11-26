@@ -1,0 +1,97 @@
+@echo off
+setlocal
+
+REM ======================================================
+REM  CONFIG
+REM ======================================================
+set "SRC=The.Godfather.1972.mp4"
+set "OUT=\ladderfrfrfr"
+
+if not exist "%OUT%" mkdir "%OUT%"
+
+REM ======================================================
+REM  ORIGINAL VIDEO-ONLY COPY (STREAM COPY)
+REM ======================================================
+echo === Making original video-only copy (stream copy) ===
+
+ffmpeg -y -i "%SRC%" ^
+  -map 0:v:0 ^
+  -c copy ^
+  "%OUT%\Godfather_2160p_original_video.mp4"
+if errorlevel 1 goto :err
+
+
+REM ======================================================
+REM  AUDIO-ONLY EXTRACT (AC-3 5.1 COPY)
+REM ======================================================
+echo.
+echo === Extracting audio-only ===
+
+ffmpeg -y -i "%SRC%" ^
+  -map 0:a:0 -c copy ^
+  "%OUT%\Godfather_audio_ac3_5_1.mp4"
+if errorlevel 1 goto :err
+
+
+REM ======================================================
+REM  VIDEO LADDER (VIDEO-ONLY, NVENC HEVC)
+REM ======================================================
+echo.
+echo === Encoding ladder (video-only, fps_mode passthrough) ===
+echo.
+
+call :encode 2160 20000k
+call :encode 1440 10000k
+call :encode 1080 7000k
+call :encode 720  4000k
+call :encode 480  1500k
+call :encode 360  800k
+call :encode 240  400k
+call :encode 144  160k
+
+echo.
+echo All encodes finished.
+goto :eof
+
+
+REM ======================================================
+REM  ENCODE FUNCTION
+REM  %1 = HEIGHT  (e.g. 1080)
+REM  %2 = BITRATE (e.g. 7000k)
+REM ======================================================
+:encode
+set "HEIGHT=%1"
+set "BITRATE=%2"
+
+echo %HEIGHT%p @ %BITRATE% ...
+
+ffmpeg -y ^
+  -hwaccel cuda -hwaccel_output_format cuda ^
+  -i "%SRC%" ^
+  -map 0:v:0 ^
+  -vf "scale_cuda=-2:%HEIGHT%:format=p010le" ^
+  -c:v hevc_nvenc ^
+  -preset p5 ^
+  -profile:v main10 ^
+  -b:v %BITRATE% -maxrate %BITRATE% -bufsize %BITRATE% ^
+  -fps_mode:v passthrough ^
+  -force_key_frames source ^
+  -g 9999 -keyint_min 9999 ^
+  -rc-lookahead 0 -no-scenecut 1 -forced-idr 1 ^
+  -an ^
+  "%OUT%\Godfather_%HEIGHT%p_%BITRATE%.mp4"
+
+if errorlevel 1 goto :err
+echo Done %HEIGHT%p.
+echo.
+goto :eof
+
+
+REM ======================================================
+REM  ERROR HANDLER
+REM ======================================================
+:err
+echo.
+echo ERROR: something failed. Check the last ffmpeg output above.
+pause
+exit /b 1

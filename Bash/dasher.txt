@@ -1,0 +1,17 @@
+MP4Box ^
+ -dash 2000 ^
+ -rap -frag-rap ^
+ -profile live ^
+ -segment-ext m4s ^
+ -segment-name "segments/$RepresentationID$/$Init=init$gf_$RepresentationID$_$Number$" ^
+ -out dash\godfather.mpd ^
+ Godfather_144p_160k.mp4#video:dur=297.9:id=v144 ^
+ Godfather_240p_400k.mp4#video:dur=297.9:id=v240 ^
+ Godfather_360p_800k.mp4#video:dur=297.9:id=v360 ^
+ Godfather_480p_1500k.mp4#video:dur=297.9:id=v480 ^
+ Godfather_720p_4000k.mp4#video:dur=297.9:id=v720 ^
+ Godfather_1080p_7000k.mp4#video:dur=297.9:id=v1080 ^
+ Godfather_1440p_10000k.mp4#video:dur=297.9:id=v1440 ^
+ Godfather_2160p_20000k.mp4#video:dur=297.9:id=v2160 ^
+ Godfather_2160p_original_video.mp4#video:dur=297.9:id=v2160orig ^
+ Godfather_audio_ac3_5_1.mp4#audio:dur=297.9:id=a_ac3
