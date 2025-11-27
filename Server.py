@@ -9,7 +9,7 @@ from urllib.parse import urlparse
 
 # config
 PORT = 8000
-ROOT_DIR = r"C:\Users\Abood\Videos\DASH\Godfather\dash"
+ROOT_DIR = r"C:\Users\ali23\Documents\Desktop 2.0\QU\CMPE 482\Server Directory\dash_godfather_test"
 
 # log file next to this script
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
