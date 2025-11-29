@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>DASH.js Player Metrics</title>
+    <script src="https://cdn.dashjs.org/latest/dash.all.min.js"></script>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            margin: 0;
+            background-color: #121212;
+            color: #ffffff;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            min-height: 100vh;
+            padding: 20px;
+        }
+        h1 {
+            margin-top: 20px;
+            font-size: 2em;
+            color: #ff3b3f;
+        }
+        video {
+            width: 90%;
+            max-width: 900px;
+            border-radius: 12px;
+            box-shadow: 0 8px 20px rgba(0,0,0,0.5);
+            margin-bottom: 20px;
+        }
+        .metrics {
+            background-color: #1e1e1e;
+            padding: 20px 30px;
+            border-radius: 12px;
+            width: 90%;
+            max-width: 900px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.4);
+            display: flex;
+            justify-content: space-around;
+            flex-wrap: wrap;
+        }
+        .metric {
+            margin: 10px;
+            text-align: center;
+        }
+        .metric span {
+            display: block;
+            font-size: 1.2em;
+            margin-top: 5px;
+            color: #00ffcc;
+        }
+        .footer {
+            margin-top: auto;
+            padding: 20px;
+            color: #888;
+            font-size: 0.9em;
+        }
+        @media (max-width: 600px) {
+            .metrics {
+                flex-direction: column;
+                align-items: center;
+            }
+        }
+    </style>
+</head>
+<body>
+    <h1>DASH.js Video Player</h1>
+    <video id="videoPlayer" controls autoplay></video>
+
+    <div class="metrics">
+        <div class="metric">
+            <strong>Buffer Length</strong>
+            <span id="bufferLength">0 s</span>
+        </div>
+        <div class="metric">
+            <strong>Average Throughput</strong>
+            <span id="averageThroughput">0 kbps</span>
+        </div>
+        <div class="metric">
+            <strong>Playhead Time</strong>
+            <span id="playheadTime">0 s</span>
+        </div>
+        <div class="metric">
+            <strong>Resolution</strong>
+            <span id="resolution">0 x 0</span>
+        </div>
+    </div>
+
+    <div class="footer">
+        Made with sweat and tears using DASH.js for streaming
+    </div>
+
+    <script>
+        /*********************************************************
+         *  CONFIG: which content & scenario
+         *********************************************************/
+        // Change this to "avatar" when you want the avatar test
+        const CONTENT = "avatar";    // "godfather" or "avatar"
+
+        let MANIFEST_URL;
+        if (CONTENT === "godfather") {
+            MANIFEST_URL = "dash_godfather_test/godfather_test.mpd";
+        } else {
+            MANIFEST_URL = "dash_avatar_test/avatar_test.mpd";
+        }
+
+        const ALGORITHM_NAME = "dash_default";
+        const SCENARIO_NAME  = "baseline";
+
+        const SESSION_ID =
+            (crypto.randomUUID && crypto.randomUUID()) ||
+            ("sess_" + Date.now() + "_" + Math.random().toString(36).slice(2));
+
+        /*********************************************************
+         *  Player init (same as before but with our URL)
+         *********************************************************/
+        const video  = document.getElementById("videoPlayer");
+        const player = dashjs.MediaPlayer().create();
+        player.initialize(video, MANIFEST_URL, true); // autoplay=true
+
+        /*********************************************************
+         *  Live metrics panel (just for display)
+         *********************************************************/
+        function updateLiveMetricsPanel() {
+            const bufferLength = video.buffered.length > 0
+                ? video.buffered.end(video.buffered.length - 1) - video.currentTime
+                : 0;
+
+            const playheadTime = video.currentTime;
+            const avgThroughput = (player.getAverageThroughput("video") || 0) / 1000; // kbps
+            const resolution = `${video.videoWidth} x ${video.videoHeight}`;
+
+            document.getElementById("bufferLength").innerText      = bufferLength.toFixed(2) + " s";
+            document.getElementById("averageThroughput").innerText = avgThroughput.toFixed(2) + " kbps";
+            document.getElementById("playheadTime").innerText      = playheadTime.toFixed(2) + " s";
+            document.getElementById("resolution").innerText        = resolution;
+        }
+
+        setInterval(updateLiveMetricsPanel, 1000);
+
+        /*********************************************************
+         *  QoE metrics (client-side: startup + rebuffer)
+         *********************************************************/
+        const qoeMetrics = {
+            sessionStart: null,
+            firstFrameTime: null,
+            endTime: null,
+
+            startupDelay: 0,
+
+            totalRebufferTime: 0,
+            rebufferCount: 0,
+            lastRebufferStart: null
+        };
+
+        // session starts when user actually hits play the first time
+        video.addEventListener("play", () => {
+            if (qoeMetrics.sessionStart === null) {
+                qoeMetrics.sessionStart = performance.now();
+            }
+        });
+
+        // first frame / resume from stall
+        player.on(dashjs.MediaPlayer.events.PLAYBACK_PLAYING, () => {
+            const now = performance.now();
+
+            if (qoeMetrics.firstFrameTime === null && qoeMetrics.sessionStart !== null) {
+                qoeMetrics.firstFrameTime = now;
+                qoeMetrics.startupDelay = (now - qoeMetrics.sessionStart) / 1000.0;
+                console.log("Startup delay (s):", qoeMetrics.startupDelay);
+            }
+
+            // end of a stall if we were stalled
+            if (qoeMetrics.lastRebufferStart !== null) {
+                qoeMetrics.totalRebufferTime += (now - qoeMetrics.lastRebufferStart) / 1000.0;
+                qoeMetrics.lastRebufferStart = null;
+            }
+        });
+
+        // stall start
+        player.on(dashjs.MediaPlayer.events.BUFFER_EMPTY, (e) => {
+            if (e.mediaType !== "video") return;
+            if (qoeMetrics.firstFrameTime !== null && qoeMetrics.lastRebufferStart === null) {
+                qoeMetrics.lastRebufferStart = performance.now();
+                qoeMetrics.rebufferCount += 1;
+            }
+        });
+
+        // stall end
+        player.on(dashjs.MediaPlayer.events.BUFFER_LOADED, (e) => {
+            if (e.mediaType !== "video") return;
+            if (qoeMetrics.lastRebufferStart !== null) {
+                const now = performance.now();
+                qoeMetrics.totalRebufferTime += (now - qoeMetrics.lastRebufferStart) / 1000.0;
+                qoeMetrics.lastRebufferStart = null;
+            }
+        });
+
+        // playback end: compute metrics + send to server
+        player.on(dashjs.MediaPlayer.events.PLAYBACK_ENDED, () => {
+            const now = performance.now();
+            qoeMetrics.endTime = now;
+
+            if (qoeMetrics.lastRebufferStart !== null) {
+                qoeMetrics.totalRebufferTime += (now - qoeMetrics.lastRebufferStart) / 1000.0;
+                qoeMetrics.lastRebufferStart = null;
+            }
+
+            const sessionDurationSec =
+                (qoeMetrics.sessionStart !== null)
+                    ? (qoeMetrics.endTime - qoeMetrics.sessionStart) / 1000.0
+                    : 0;
+
+            const startupDelay = qoeMetrics.startupDelay;
+
+            const rebufferRatio =
+                sessionDurationSec > 0
+                    ? qoeMetrics.totalRebufferTime / sessionDurationSec
+                    : 0;
+
+            const rebufferCount = qoeMetrics.rebufferCount;
+
+            const result = {
+                sessionId: SESSION_ID,
+                algorithm: ALGORITHM_NAME,
+                scenario:  SCENARIO_NAME,
+                manifest:  MANIFEST_URL,
+
+                startupDelay,
+                sessionDurationSec,
+                totalRebufferTime: qoeMetrics.totalRebufferTime,
+                rebufferRatio,
+                rebufferCount
+            };
+
+            console.log("QoE metrics for this session:", result);
+            sendMetricsToServer(result);
+        });
+
+        function sendMetricsToServer(result) {
+            fetch("/logMetrics", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(result)
+            }).then(r => {
+                if (!r.ok) {
+                    console.error("Failed to log metrics:", r.statusText);
+                }
+            }).catch(err => {
+                console.error("Error logging metrics:", err);
+            });
+        }
+    </script>
+</body>
+</html>
