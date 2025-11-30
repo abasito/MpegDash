@@ -1,0 +1,397 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>DASH.js + ONNX RL ABR Demo</title>
+
+  <!-- dash.js (4.4.0 — full ABR API support) -->
+  <script src="https://cdn.dashjs.org/v4.4.0/dash.all.min.js"></script>
+
+  <!-- ONNX Runtime Web -->
+  <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/ort.min.js"></script>
+
+  <style>
+    body {
+      font-family: Arial, Helvetica, sans-serif;
+      background:#111;
+      color:#eee;
+      margin: 0;
+      padding: 20px;
+      display:flex;
+      flex-direction:column;
+      align-items:center;
+    }
+    h1 { color:#ff6b6b; }
+    video {
+      width: 90%;
+      max-width: 960px;
+      border-radius:10px;
+      box-shadow:0 8px 30px rgba(0,0,0,0.6);
+      margin-bottom:12px;
+    }
+    .metrics {
+      width:90%;
+      max-width:960px;
+      background:#1b1b1b;
+      padding:12px;
+      border-radius:10px;
+      display:flex;
+      gap:12px;
+      flex-wrap:wrap;
+      justify-content:space-between;
+    }
+    .metric { min-width:150px; }
+    .small { color:#aaa; font-size:0.85em; }
+    #rlStatus { margin-top:10px; color:#a8ffb0; }
+    .footer { margin-top:20px; color:#7a7a7a; }
+  </style>
+</head>
+<body>
+  <h1>DASH.js — RL ABR (ONNX in browser)</h1>
+
+  <video id="videoPlayer" controls autoplay muted></video>
+
+  <div class="metrics">
+    <div class="metric">
+      <div class="small">Buffer</div>
+      <div id="buffer">0 s</div>
+    </div>
+    <div class="metric">
+      <div class="small">Throughput (avg)</div>
+      <div id="throughput">0 kbps</div>
+    </div>
+    <div class="metric">
+      <div class="small">Playhead</div>
+      <div id="playhead">0 s</div>
+    </div>
+    <div class="metric">
+      <div class="small">Resolution</div>
+      <div id="resolution">0 x 0</div>
+    </div>
+    <div class="metric">
+      <div class="small">Available Qualities</div>
+      <div id="qualities">-</div>
+    </div>
+    <div class="metric">
+      <div class="small">RL Chosen Index</div>
+      <div id="rlChoice">-</div>
+    </div>
+  </div>
+
+  <div id="rlStatus" class="small">Loading model...</div>
+  <div class="footer">
+    Place <code>ready.model</code> (or <code>abr_agent.onnx</code> if you change the path)
+    next to this file.
+  </div>
+
+<script>
+(async function () {
+
+  /*********************************************************
+   * CONFIG
+   *********************************************************/
+  const VIDEO_CHOICE = 1;  // 0 = Godfather, 1 = Avatar
+
+  const MANIFEST_URL = (VIDEO_CHOICE === 0)
+    ? "dash_godfather_test/godfather_test.mpd"
+    : "dash_avatar_test/avatar_test.mpd";
+
+  const ALGORITHM_NAME = "rl_onnx";
+  const SCENARIO_NAME  = "baseline";   // change per test run if you want
+
+  const SESSION_ID = (window.crypto && crypto.randomUUID)
+    ? crypto.randomUUID()
+    : ("sess_" + Date.now() + "_" + Math.random().toString(36).slice(2));
+
+  // ONNX model path (must be reachable at http://...:8000/abr_agent.onnx)
+  const MODEL_PATH = "abr_agent.onnx";
+
+  // RL agent config
+  const LOOKAHEAD = 5;
+  const SEG_DURATION_SEC = 2.0;
+  const HISTORY_LEN = 5;
+  const DECISION_INTERVAL_MS = 1000;
+
+  /*********************************************************
+   * DOM elements
+   *********************************************************/
+  const video        = document.getElementById("videoPlayer");
+  const elBuffer     = document.getElementById("buffer");
+  const elThroughput = document.getElementById("throughput");
+  const elPlayhead   = document.getElementById("playhead");
+  const elResolution = document.getElementById("resolution");
+  const elQualities  = document.getElementById("qualities");
+  const elRlChoice   = document.getElementById("rlChoice");
+  const elStatus     = document.getElementById("rlStatus");
+
+  /*********************************************************
+   * Quality ladder (for QoE mapping)
+   * Indices must match the MPD representation qualityIndex
+   *********************************************************/
+  const QUALITY_LADDER_GODFATHER = [
+    { index: 0, name: "144p",  height: 144,  bitrateKbps: 160,   psnr: 24.584986, ssim: 0.937088, vmaf: 19.265094 },
+    { index: 1, name: "240p",  height: 240,  bitrateKbps: 400,   psnr: 24.844758, ssim: 0.947607, vmaf: 33.249116 },
+    { index: 2, name: "360p",  height: 360,  bitrateKbps: 800,   psnr: 24.869610, ssim: 0.955107, vmaf: 43.997127 },
+    { index: 3, name: "480p",  height: 480,  bitrateKbps: 1500,  psnr: 24.904091, ssim: 0.959170, vmaf: 49.117189 },
+    { index: 4, name: "720p",  height: 720,  bitrateKbps: 4000,  psnr: 25.000623, ssim: 0.964280, vmaf: 52.853629 },
+    { index: 5, name: "1080p", height: 1080, bitrateKbps: 7000,  psnr: 24.943455, ssim: 0.965533, vmaf: 54.056773 },
+    { index: 6, name: "1440p", height: 1440, bitrateKbps: 10000, psnr: 24.948999, ssim: 0.966464, vmaf: 54.329214 },
+    { index: 7, name: "2160p", height: 2160, bitrateKbps: 20000, psnr: 24.984136, ssim: 0.968931, vmaf: 54.655291 },
+    { index: 8, name: "2160p_original", height: 2160, bitrateKbps: 55000, psnr: 40.0, ssim: 1.0, vmaf: 100.0 }
+  ];
+
+  const QUALITY_LADDER_AVATAR = [
+    { index: 0, name: "144p",  height: 144,  bitrateKbps: 160,   psnr: 21.925848, ssim: 0.903569, vmaf: 3.113049 },
+    { index: 1, name: "240p",  height: 240,  bitrateKbps: 400,   psnr: 22.085529, ssim: 0.912304, vmaf: 4.172016 },
+    { index: 2, name: "360p",  height: 360,  bitrateKbps: 800,   psnr: 22.105539, ssim: 0.921861, vmaf: 10.979776 },
+    { index: 3, name: "480p",  height: 480,  bitrateKbps: 1500,  psnr: 22.148476, ssim: 0.929292, vmaf: 11.050656 },
+    { index: 4, name: "720p",  height: 720,  bitrateKbps: 4000,  psnr: 22.255094, ssim: 0.942557, vmaf: 28.709828 },
+    { index: 5, name: "1080p", height: 1080, bitrateKbps: 7000,  psnr: 22.208164, ssim: 0.947110, vmaf: 34.428899 },
+    { index: 6, name: "1440p", height: 1440, bitrateKbps: 10000, psnr: 22.216935, ssim: 0.949680, vmaf: 41.277826 },
+    { index: 7, name: "2160p", height: 2160, bitrateKbps: 20000, psnr: 22.254343, ssim: 0.968931, vmaf: 54.655291 },
+    { index: 8, name: "2160p_original", height: 2160, bitrateKbps: 55000, psnr: 25.0, ssim: 1.0, vmaf: 100.0 }
+  ];
+
+  const QUALITY_LADDER = (VIDEO_CHOICE === 0)
+    ? QUALITY_LADDER_GODFATHER
+    : QUALITY_LADDER_AVATAR;
+
+  /*********************************************************
+   * DASH.js initialization (RL ABR)
+   *********************************************************/
+  const player = dashjs.MediaPlayer().create();
+
+  player.updateSettings({
+    streaming: {
+      abr: {
+        autoSwitchBitrate: { video: false }, // RL chooses quality
+        useDefaultABRRules: false
+      }
+    }
+  });
+
+  player.initialize(video, MANIFEST_URL, true);
+
+  /*********************************************************
+   * Representation discovery
+   *********************************************************/
+  let representations = [];
+  let sortedReps = [];
+
+  function refreshRepresentations() {
+    try {
+      const list = player.getBitrateInfoListFor("video") || [];
+
+      representations = list.map((r) => ({
+        qualityIndex: r.qualityIndex,
+        bandwidth:    r.bitrate,  // in bps
+        height:       r.height,
+        width:        r.width
+      }));
+
+      sortedReps = representations.slice().sort((a, b) => a.bandwidth - b.bandwidth);
+
+      if (sortedReps.length === 0) {
+        elQualities.innerText = "-";
+      } else {
+        elQualities.innerText = sortedReps
+          .map((r, i) => `${i}: ${Math.round(r.bandwidth / 1000)} kbps`)
+          .join(" | ");
+      }
+    } catch (e) {
+      console.warn("refreshRepresentations error:", e);
+      elQualities.innerText = "-";
+    }
+  }
+
+  player.on(dashjs.MediaPlayer.events.STREAM_INITIALIZED, refreshRepresentations);
+  setInterval(refreshRepresentations, 2000);
+
+  /*********************************************************
+   * Histories (throughput & latency) for ONNX input
+   *********************************************************/
+  const tpHistory  = [];
+  const latHistory = [];
+
+  function pushHistory(arr, v) {
+    arr.unshift(v);
+    if (arr.length > HISTORY_LEN) arr.pop();
+  }
+
+  function stats(arr) {
+    if (!arr.length) return [0, 0, 0];
+    const cur  = arr[0];
+    const mean = arr.reduce((a, b) => a + b, 0) / arr.length;
+    const variance = arr.reduce((a, b) => a + (b - mean) * (b - mean), 0) / arr.length;
+    const std  = Math.sqrt(variance);
+    return [cur, mean, std];
+  }
+
+  /*********************************************************
+   * ONNX model loading
+   *********************************************************/
+  let session = null;
+  try {
+    const resp = await fetch(MODEL_PATH);
+    if (!resp.ok) throw new Error("HTTP " + resp.status);
+    const modelBuffer = await resp.arrayBuffer();
+    session = await ort.InferenceSession.create(modelBuffer);
+    elStatus.innerText = "Model loaded. RL ABR active.";
+  } catch (e) {
+    console.warn("Failed to load ONNX:", e);
+    elStatus.innerText = "Failed to load ONNX. Falling back to greedy.";
+  }
+
+  /*********************************************************
+   * Helper functions
+   *********************************************************/
+  function getBufferSec() {
+    if (video.buffered.length > 0) {
+      const end = video.buffered.end(video.buffered.length - 1);
+      return Math.max(0, end - video.currentTime);
+    }
+    return 0;
+  }
+
+  function getThroughputBps() {
+    try {
+      const tp = player.getAverageThroughput("video");
+      return tp || 0;
+    } catch {
+      return 0;
+    }
+  }
+
+  function greedyPick(bwBps, bitrates) {
+    const cap = 0.85 * bwBps;
+    let best = 0;
+    for (let i = 0; i < bitrates.length; i++) {
+      if (bitrates[i] <= cap) best = i;
+    }
+    return best;
+  }
+
+  /*********************************************************
+   * Per-tick logging to /logMetrics
+   * RLServer aggregates these into running averages.
+   *********************************************************/
+  let segmentCounter = 0;
+
+  function logCurrentQuality(chosenRep) {
+    const q = QUALITY_LADDER.find(q => q.index === chosenRep.qualityIndex);
+    if (!q) {
+      console.warn("No QUALITY_LADDER entry for qualityIndex", chosenRep.qualityIndex);
+      return;
+    }
+
+    segmentCounter += 1;
+
+    const payload = {
+      sessionId: SESSION_ID,
+      algorithm: ALGORITHM_NAME,
+      scenario:  SCENARIO_NAME,
+      manifest:  MANIFEST_URL,
+
+      segmentIndex: segmentCounter,
+      qualityIndex: q.index,
+      bitrateKbps:  q.bitrateKbps,
+      vmaf:         q.vmaf,
+      psnr:         q.psnr,
+      ssim:         q.ssim
+    };
+
+    fetch("/logMetrics", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    }).catch(err => {
+      console.error("Error posting /logMetrics:", err);
+    });
+  }
+
+  /*********************************************************
+   * Main RL decision loop
+   *********************************************************/
+  async function decisionTick() {
+    const bufferSec  = getBufferSec();
+    const tpBps      = Math.max(1, getThroughputBps());
+    const playhead   = video.currentTime;
+    const resolution = `${video.videoWidth} x ${video.videoHeight}`;
+
+    // UI
+    elBuffer.innerText     = bufferSec.toFixed(2) + " s";
+    elPlayhead.innerText   = playhead.toFixed(2) + " s";
+    elResolution.innerText = resolution;
+    elThroughput.innerText = (tpBps / 1000).toFixed(1) + " kbps";
+
+    // update histories (throughput & latency)
+    pushHistory(tpHistory, tpBps);
+    pushHistory(latHistory, 0.05); // dummy 50 ms RTT unless you have real data
+
+    if (sortedReps.length === 0) {
+      elRlChoice.innerText = "-";
+      return;
+    }
+
+    const bitrates = sortedReps.map(r => r.bandwidth);
+    const nActions = bitrates.length;
+
+    const chunkSizes = new Float32Array(LOOKAHEAD * nActions);
+    for (let t = 0; t < LOOKAHEAD; t++) {
+      for (let a = 0; a < nActions; a++) {
+        chunkSizes[t * nActions + a] = bitrates[a] * SEG_DURATION_SEC;
+      }
+    }
+
+    let chosenAction = 0;
+
+    if (session) {
+      try {
+        const tpStats  = stats(tpHistory);
+        const latStats = stats(latHistory);
+
+        const feeds = {
+          buffer_sec:  new ort.Tensor("float32", new Float32Array([bufferSec]), [1,1]),
+          throughput:  new ort.Tensor("float32", new Float32Array(tpStats),      [1,3]),
+          latency:     new ort.Tensor("float32", new Float32Array(latStats),     [1,3]),
+          chunk_sizes: new ort.Tensor("float32", chunkSizes,                     [1, LOOKAHEAD, nActions])
+        };
+
+        const output = await session.run(feeds);
+        const logits = output.logits ?? output[Object.keys(output)[0]];
+        const data   = logits.data;
+
+        let bestVal = -Infinity;
+        let bestIdx = 0;
+        for (let i = 0; i < nActions; i++) {
+          if (data[i] > bestVal) {
+            bestVal = data[i];
+            bestIdx = i;
+          }
+        }
+        chosenAction = bestIdx;
+      } catch (e) {
+        console.warn("RL inference failed, using greedy:", e);
+        chosenAction = greedyPick(tpBps, bitrates);
+      }
+    } else {
+      chosenAction = greedyPick(tpBps, bitrates);
+    }
+
+    const chosenRep = sortedReps[chosenAction];
+    if (chosenRep) {
+      // apply quality
+      player.setQualityFor("video", chosenRep.qualityIndex);
+      elRlChoice.innerText = `${chosenAction} (q=${chosenRep.qualityIndex})`;
+
+      // log instantaneous QoE; server turns it into running averages
+      logCurrentQuality(chosenRep);
+    }
+  }
+
+  setInterval(decisionTick, DECISION_INTERVAL_MS);
+
+})();
+</script>
+</body>
+</html>
